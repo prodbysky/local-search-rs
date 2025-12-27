@@ -33,6 +33,8 @@ fn main() {
         .log_level(raylib::ffi::TraceLogLevel::LOG_FATAL)
         .build();
 
+    h.set_exit_key(None);
+
     let app_dirs = platform_dirs::AppDirs::new(Some("local-search"), false).unwrap();
     let mut document_base_dir = platform_dirs::UserDirs::new().unwrap().document_dir;
     document_base_dir.push("local-search");
@@ -51,7 +53,7 @@ fn main() {
         let conf_file_content = std::fs::read_to_string(&config_file).unwrap();
         config = toml::de::from_str(&conf_file_content).unwrap();
         for p in &mut config.document_directories {
-            let np = std::path::PathBuf::from_str(&p).unwrap();
+            let np = std::path::PathBuf::from_str(p).unwrap();
             let mut copy = document_base_dir.clone();
             copy.push(np);
             *p = copy.to_string_lossy().to_string();
@@ -139,6 +141,7 @@ fn main() {
     let label_size = font.measure_text(label_text, 64.0, 0.0);
 
     let mut query = String::new();
+    let mut query_box_selected = false;
 
     let mut scroll_velocity = raylib::math::Vector2::zero();
     let mut doc_offset = 0.0;
@@ -163,29 +166,44 @@ fn main() {
 
             if h.is_mouse_button_down(raylib::consts::MouseButton::MOUSE_BUTTON_LEFT) {
                 search_color = clicked_color;
+                query_box_selected = true;
             }
+        }
+        if h.is_mouse_button_down(raylib::consts::MouseButton::MOUSE_BUTTON_LEFT)
+            && !search_rect.check_collision_point_rec(h.get_mouse_position())
+            || h.is_key_down(raylib::consts::KeyboardKey::KEY_ESCAPE)
+        {
+            query_box_selected = false;
+        }
+        if h.is_key_down(raylib::consts::KeyboardKey::KEY_SLASH) {
+            query_box_selected = true;
+        }
+        if query_box_selected {
+            search_color = hovered_color;
         }
 
-        if h.is_key_pressed(raylib::consts::KeyboardKey::KEY_BACKSPACE)
-            || h.is_key_pressed_repeat(raylib::consts::KeyboardKey::KEY_BACKSPACE)
-        {
-            if !query.is_empty() {
-                query.pop();
-            }
-        }
-        scroll_velocity.y += h.get_mouse_wheel_move_v().y * 5000.0;
+        scroll_velocity.y += h.get_mouse_wheel_move_v().y * 10000.0;
         scroll_velocity.y /= 1.2;
         doc_offset += scroll_velocity.y * h.get_frame_time();
         doc_offset = doc_offset.clamp(-f32::MAX, 0.0);
 
-        while let Some(k) = h.get_key_pressed() {
-            let a = k as i32 as u8 as char;
-            if a.is_alphanumeric() || a == ' ' {
-                query.push(a.to_ascii_lowercase());
+        if query_box_selected {
+            if (h.is_key_pressed(raylib::consts::KeyboardKey::KEY_BACKSPACE)
+                || h.is_key_pressed_repeat(raylib::consts::KeyboardKey::KEY_BACKSPACE))
+                && !query.is_empty()
+            {
+                query.pop();
+            }
+
+            while let Some(k) = h.get_key_pressed() {
+                let a = k as i32 as u8 as char;
+                if a.is_alphanumeric() || a == ' ' {
+                    query.push(a.to_ascii_lowercase());
+                }
             }
         }
 
-        if h.is_key_pressed(raylib::consts::KeyboardKey::KEY_ENTER) {
+        if h.is_key_down(raylib::consts::KeyboardKey::KEY_ENTER) {
             let terms: Vec<_> = query.split_whitespace().collect();
             docs = do_query(&model, &terms);
             doc_offset = 0.0;
@@ -208,7 +226,7 @@ fn main() {
                 }
             }
             if rect.y < w_h as f32 && rect.y > 0.0 {
-                d.draw_rectangle_rec(rect, result_color);
+                d.draw_rectangle_rounded(rect, 0.1, 10, result_color);
                 d.draw_text_ex(
                     &font,
                     doc,
@@ -223,6 +241,8 @@ fn main() {
             }
         }
 
+        // draws a mask for the search results so when the user scrolls down the search results
+        // don't clutter up the query bar area
         d.draw_rectangle(
             0,
             0,
@@ -230,22 +250,16 @@ fn main() {
             (search_rect.y + search_rect.height) as i32,
             bg_color,
         );
-        d.draw_fps(10, 10);
 
+        // ehhh i dont know how i feel about the label i dont want to be so pretentious
         d.draw_text_ex(&font, label_text, label_pos, 64.0, 0.0, fg_color);
-        d.draw_line(
-            (w_w as f32 / 64.0) as i32,
-            (label_pos.y + label_size.y * 1.5) as i32,
-            (w_w as f32 - w_w as f32 / 64.0) as i32,
-            (label_pos.y + label_size.y * 1.5) as i32,
-            fg_color,
-        );
-        d.draw_rectangle_rec(&search_rect, search_color);
+
+        d.draw_rectangle_rounded(search_rect, 0.1, 10, search_color);
         d.draw_text_ex(
             &font,
             &query,
             raylib::math::Vector2::new(
-                search_rect.x + search_rect.x / 16.0,
+                search_rect.x + search_rect.x / 16.0 + (search_rect.x + search_rect.x / 128.0),
                 search_rect.y + search_rect.y / 16.0,
             ),
             32.0,
@@ -286,14 +300,14 @@ fn create_document_from_text(text: &str) -> Document {
 
 #[derive(Debug)]
 enum FileType {
-    XML,
+    Xml,
 }
 
 impl FromStr for FileType {
     type Err = ();
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "xml" | "xhtml" => Ok(Self::XML),
+            "xml" | "xhtml" => Ok(Self::Xml),
             x => {
                 eprintln!("[ERR]: File is of unindexable type {x}");
                 Err(())
@@ -310,7 +324,7 @@ fn analyze(entry: std::path::PathBuf, model: &mut HashMap<String, Document>) -> 
                 return Err(());
             }
             Some(s) => match s.to_str().unwrap().parse() {
-                Ok(FileType::XML) => {
+                Ok(FileType::Xml) => {
                     let file = BufReader::new(File::open(&entry).unwrap());
                     let parser = xml::EventReader::new(file);
                     let mut text = String::with_capacity(1024 * 1024);
@@ -375,11 +389,11 @@ fn do_query(model: &HashMap<String, Document>, terms: &[&str]) -> Vec<String> {
                 }
                 Some(t) => *t,
             };
-            let tf = count as f64 / data.words.iter().map(|(_, v)| *v).sum::<usize>() as f64;
+            let tf = count as f64 / data.words.values().copied().sum::<usize>() as f64;
             let idf = (model.iter().count() as f64
                 / model
                     .iter()
-                    .filter(|(_, d)| d.words.get(&t).is_some())
+                    .filter(|(_, d)| d.words.contains_key(&t))
                     .count() as f64)
                 .log2();
             point += tf * idf;
