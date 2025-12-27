@@ -3,16 +3,36 @@ use raylib::text::RaylibFont;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs::File, io::BufReader, str::FromStr};
 
+#[derive(Deserialize, Serialize, Default, Debug)]
+struct Color {
+    r: u8,
+    g: u8,
+    b: u8,
+}
 
 #[derive(Deserialize, Serialize, Default, Debug)]
 struct Config {
-    document_directories: Vec<String>
+    document_directories: Vec<String>,
+    font_name: Option<String>,
+    background_color: Option<Color>,
+    foreground_color: Option<Color>,
+
+    idle_color: Option<Color>,
+    hovered_color: Option<Color>,
+    clicked_color: Option<Color>,
 }
 
 const FONT: &[u8] = include_bytes!("../assets/GeistMonoNerdFontMono-Regular.otf");
-// TODO: Replace with a indexing of files listed in the config
 
 fn main() {
+    let (mut h, t) = raylib::init()
+        .msaa_4x()
+        .size(1280, 720)
+        .resizable()
+        .vsync()
+        .log_level(raylib::ffi::TraceLogLevel::LOG_FATAL)
+        .build();
+
     let app_dirs = platform_dirs::AppDirs::new(Some("local-search"), false).unwrap();
     let mut document_base_dir = platform_dirs::UserDirs::new().unwrap().document_dir;
     document_base_dir.push("local-search");
@@ -23,10 +43,10 @@ fn main() {
     std::fs::create_dir_all(&app_dirs.state_dir).unwrap();
     std::fs::create_dir_all(&document_base_dir).unwrap();
 
-
-
     let mut config = Config::default();
-    config.document_directories.push(document_base_dir.to_string_lossy().to_string());
+    config
+        .document_directories
+        .push(document_base_dir.to_string_lossy().to_string());
     if config_file.exists() {
         let conf_file_content = std::fs::read_to_string(&config_file).unwrap();
         config = toml::de::from_str(&conf_file_content).unwrap();
@@ -44,22 +64,76 @@ fn main() {
     if index_file.exists() {
         model = serde_json::de::from_reader(std::io::BufReader::new(
             std::fs::File::open(index_file).unwrap(),
-        )).unwrap();
+        ))
+        .unwrap();
     } else {
         for p in config.document_directories {
             let _ = analyze(std::path::PathBuf::from(p), &mut model);
         }
-        std::fs::write(&index_file, serde_json::ser::to_string_pretty(&model).unwrap()).unwrap();
+        std::fs::write(
+            &index_file,
+            serde_json::ser::to_string_pretty(&model).unwrap(),
+        )
+        .unwrap();
     }
 
+    let font = if let Some(name) = config.font_name {
+        let cache = rust_fontconfig::FcFontCache::build();
+        let mut trace = Vec::new();
+        let results = cache.query(
+            &rust_fontconfig::FcPattern {
+                name: Some(name.clone()),
+                ..Default::default()
+            },
+            &mut trace,
+        );
+        match results {
+            Some(r) => {
+                let bytes = cache.get_font_bytes(&r.id).unwrap();
+                h.load_font_from_memory(&t, ".ttf", &bytes, 64, None)
+                    .unwrap()
+            }
+            None => {
+                eprintln!(
+                    "[WARN]: Failed to find font {}, falling back to built in font",
+                    &name
+                );
+                h.load_font_from_memory(&t, ".otf", FONT, 64, None).unwrap()
+            }
+        }
+    } else {
+        h.load_font_from_memory(&t, ".otf", FONT, 64, None).unwrap()
+    };
 
-    let (mut h, t) = raylib::init()
-        .msaa_4x()
-        .size(1280, 720)
-        .resizable()
-        .vsync()
-        .build();
-    let font = h.load_font_from_memory(&t, ".otf", FONT, 64, None).unwrap();
+    let bg_color = if let Some(c) = config.background_color {
+        raylib::color::Color::new(c.r, c.g, c.b, 255)
+    } else {
+        raylib::color::Color::new(0x18, 0x18, 0x18, 255)
+    };
+
+    let fg_color = if let Some(c) = config.foreground_color {
+        raylib::color::Color::new(c.r, c.g, c.b, 255)
+    } else {
+        raylib::color::Color::new(0xbb, 0xbb, 0xbb, 255)
+    };
+
+    let idle_color = if let Some(c) = config.idle_color {
+        raylib::color::Color::new(c.r, c.g, c.b, 255)
+    } else {
+        raylib::color::Color::new(20, 20, 20, 255)
+    };
+
+    let hovered_color = if let Some(c) = config.hovered_color {
+        raylib::color::Color::new(c.r, c.g, c.b, 255)
+    } else {
+        raylib::color::Color::new(30, 30, 30, 255)
+    };
+
+    let clicked_color = if let Some(c) = config.clicked_color {
+        raylib::color::Color::new(c.r, c.g, c.b, 255)
+    } else {
+        raylib::color::Color::new(40, 40, 40, 255)
+    };
 
     let label_text = "local search";
     let label_size = font.measure_text(label_text, 64.0, 0.0);
@@ -83,12 +157,12 @@ fn main() {
             w_w as f32 - (w_w as f32 / 32.0),
             label_size.y * 0.75,
         );
-        let mut search_color = raylib::color::Color::new(20, 20, 20, 255);
+        let mut search_color = idle_color;
         if search_rect.check_collision_point_rec(h.get_mouse_position()) {
-            search_color = raylib::color::Color::new(30, 30, 30, 255);
+            search_color = hovered_color;
 
             if h.is_mouse_button_down(raylib::consts::MouseButton::MOUSE_BUTTON_LEFT) {
-                search_color = raylib::color::Color::new(40, 40, 40, 255);
+                search_color = clicked_color;
             }
         }
 
@@ -119,18 +193,18 @@ fn main() {
 
         let mut d = h.begin_drawing(&t);
 
-        d.clear_background(raylib::color::rcolor(0x18, 0x18, 0x18, 0xff));
+        d.clear_background(bg_color);
 
         for (i, doc) in docs.iter().enumerate() {
             let mut rect = search_rect;
             rect.y += doc_offset;
             rect.y += (i + 1) as f32 * rect.height * 1.1;
-            let mut result_color = raylib::color::Color::new(20, 20, 20, 255);
+            let mut result_color = idle_color;
             if rect.check_collision_point_rec(d.get_mouse_position()) {
-                result_color = raylib::color::Color::new(30, 30, 30, 255);
+                result_color = hovered_color;
 
                 if d.is_mouse_button_down(raylib::consts::MouseButton::MOUSE_BUTTON_LEFT) {
-                    result_color = raylib::color::Color::new(40, 40, 40, 255);
+                    result_color = clicked_color;
                 }
             }
             if rect.y < w_h as f32 && rect.y > 0.0 {
@@ -144,7 +218,7 @@ fn main() {
                     ),
                     32.0,
                     0.0,
-                    raylib::color::Color::WHITE,
+                    fg_color,
                 );
             }
         }
@@ -154,24 +228,17 @@ fn main() {
             0,
             w_w,
             (search_rect.y + search_rect.height) as i32,
-            raylib::color::Color::new(0x18, 0x18, 0x18, 0xff),
+            bg_color,
         );
         d.draw_fps(10, 10);
 
-        d.draw_text_ex(
-            &font,
-            label_text,
-            label_pos,
-            64.0,
-            0.0,
-            raylib::color::Color::WHITE,
-        );
+        d.draw_text_ex(&font, label_text, label_pos, 64.0, 0.0, fg_color);
         d.draw_line(
             (w_w as f32 / 64.0) as i32,
             (label_pos.y + label_size.y * 1.5) as i32,
             (w_w as f32 - w_w as f32 / 64.0) as i32,
             (label_pos.y + label_size.y * 1.5) as i32,
-            raylib::color::Color::WHITE,
+            fg_color,
         );
         d.draw_rectangle_rec(&search_rect, search_color);
         d.draw_text_ex(
@@ -183,7 +250,7 @@ fn main() {
             ),
             32.0,
             0.0,
-            raylib::color::Color::WHITE,
+            fg_color,
         );
     }
 }
