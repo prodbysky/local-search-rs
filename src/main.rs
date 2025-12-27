@@ -1,0 +1,328 @@
+use raylib::prelude::RaylibDraw;
+use raylib::text::RaylibFont;
+use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, fs::File, io::BufReader, str::FromStr};
+
+
+#[derive(Deserialize, Serialize, Default, Debug)]
+struct Config {
+    document_directories: Vec<String>
+}
+
+const FONT: &[u8] = include_bytes!("../assets/GeistMonoNerdFontMono-Regular.otf");
+// TODO: Replace with a indexing of files listed in the config
+
+fn main() {
+    let app_dirs = platform_dirs::AppDirs::new(Some("local-search"), false).unwrap();
+    let mut document_base_dir = platform_dirs::UserDirs::new().unwrap().document_dir;
+    document_base_dir.push("local-search");
+
+    let config_file = app_dirs.config_dir.join("config.toml");
+    let index_file = app_dirs.state_dir.join("index.json");
+    std::fs::create_dir_all(&app_dirs.config_dir).unwrap();
+    std::fs::create_dir_all(&app_dirs.state_dir).unwrap();
+    std::fs::create_dir_all(&document_base_dir).unwrap();
+
+
+
+    let mut config = Config::default();
+    config.document_directories.push(document_base_dir.to_string_lossy().to_string());
+    if config_file.exists() {
+        let conf_file_content = std::fs::read_to_string(&config_file).unwrap();
+        config = toml::de::from_str(&conf_file_content).unwrap();
+        for p in &mut config.document_directories {
+            let np = std::path::PathBuf::from_str(&p).unwrap();
+            let mut copy = document_base_dir.clone();
+            copy.push(np);
+            *p = copy.to_string_lossy().to_string();
+        }
+    } else {
+        std::fs::write(&config_file, toml::ser::to_string_pretty(&config).unwrap()).unwrap();
+    }
+
+    let mut model = HashMap::new();
+    if index_file.exists() {
+        model = serde_json::de::from_reader(std::io::BufReader::new(
+            std::fs::File::open(index_file).unwrap(),
+        )).unwrap();
+    } else {
+        for p in config.document_directories {
+            let _ = analyze(std::path::PathBuf::from(p), &mut model);
+        }
+        std::fs::write(&index_file, serde_json::ser::to_string_pretty(&model).unwrap()).unwrap();
+    }
+
+
+    let (mut h, t) = raylib::init()
+        .msaa_4x()
+        .size(1280, 720)
+        .resizable()
+        .vsync()
+        .build();
+    let font = h.load_font_from_memory(&t, ".otf", FONT, 64, None).unwrap();
+
+    let label_text = "local search";
+    let label_size = font.measure_text(label_text, 64.0, 0.0);
+
+    let mut query = String::new();
+
+    let mut scroll_velocity = raylib::math::Vector2::zero();
+    let mut doc_offset = 0.0;
+
+    let mut docs = vec![];
+
+    while !h.window_should_close() {
+        let w_w = h.get_screen_width();
+        let w_h = h.get_screen_height();
+
+        let label_pos =
+            raylib::math::Vector2::new((w_w as f32 / 2.0) - label_size.x / 2.0, w_h as f32 / 32.0);
+        let search_rect = raylib::math::Rectangle::new(
+            w_w as f32 / 64.0,
+            label_pos.y + label_size.y * 1.5 + w_h as f32 / 64.0,
+            w_w as f32 - (w_w as f32 / 32.0),
+            label_size.y * 0.75,
+        );
+        let mut search_color = raylib::color::Color::new(20, 20, 20, 255);
+        if search_rect.check_collision_point_rec(h.get_mouse_position()) {
+            search_color = raylib::color::Color::new(30, 30, 30, 255);
+
+            if h.is_mouse_button_down(raylib::consts::MouseButton::MOUSE_BUTTON_LEFT) {
+                search_color = raylib::color::Color::new(40, 40, 40, 255);
+            }
+        }
+
+        if h.is_key_pressed(raylib::consts::KeyboardKey::KEY_BACKSPACE)
+            || h.is_key_pressed_repeat(raylib::consts::KeyboardKey::KEY_BACKSPACE)
+        {
+            if !query.is_empty() {
+                query.pop();
+            }
+        }
+        scroll_velocity.y += h.get_mouse_wheel_move_v().y * 5000.0;
+        scroll_velocity.y /= 1.2;
+        doc_offset += scroll_velocity.y * h.get_frame_time();
+        doc_offset = doc_offset.clamp(-f32::MAX, 0.0);
+
+        while let Some(k) = h.get_key_pressed() {
+            let a = k as i32 as u8 as char;
+            if a.is_alphanumeric() || a == ' ' {
+                query.push(a.to_ascii_lowercase());
+            }
+        }
+
+        if h.is_key_pressed(raylib::consts::KeyboardKey::KEY_ENTER) {
+            let terms: Vec<_> = query.split_whitespace().collect();
+            docs = do_query(&model, &terms);
+            doc_offset = 0.0;
+        }
+
+        let mut d = h.begin_drawing(&t);
+
+        d.clear_background(raylib::color::rcolor(0x18, 0x18, 0x18, 0xff));
+
+        for (i, doc) in docs.iter().enumerate() {
+            let mut rect = search_rect;
+            rect.y += doc_offset;
+            rect.y += (i + 1) as f32 * rect.height * 1.1;
+            let mut result_color = raylib::color::Color::new(20, 20, 20, 255);
+            if rect.check_collision_point_rec(d.get_mouse_position()) {
+                result_color = raylib::color::Color::new(30, 30, 30, 255);
+
+                if d.is_mouse_button_down(raylib::consts::MouseButton::MOUSE_BUTTON_LEFT) {
+                    result_color = raylib::color::Color::new(40, 40, 40, 255);
+                }
+            }
+            if rect.y < w_h as f32 && rect.y > 0.0 {
+                d.draw_rectangle_rec(rect, result_color);
+                d.draw_text_ex(
+                    &font,
+                    doc,
+                    raylib::math::Vector2::new(
+                        rect.x + rect.width / 128.0,
+                        rect.y + rect.height / 4.0,
+                    ),
+                    32.0,
+                    0.0,
+                    raylib::color::Color::WHITE,
+                );
+            }
+        }
+
+        d.draw_rectangle(
+            0,
+            0,
+            w_w,
+            (search_rect.y + search_rect.height) as i32,
+            raylib::color::Color::new(0x18, 0x18, 0x18, 0xff),
+        );
+        d.draw_fps(10, 10);
+
+        d.draw_text_ex(
+            &font,
+            label_text,
+            label_pos,
+            64.0,
+            0.0,
+            raylib::color::Color::WHITE,
+        );
+        d.draw_line(
+            (w_w as f32 / 64.0) as i32,
+            (label_pos.y + label_size.y * 1.5) as i32,
+            (w_w as f32 - w_w as f32 / 64.0) as i32,
+            (label_pos.y + label_size.y * 1.5) as i32,
+            raylib::color::Color::WHITE,
+        );
+        d.draw_rectangle_rec(&search_rect, search_color);
+        d.draw_text_ex(
+            &font,
+            &query,
+            raylib::math::Vector2::new(
+                search_rect.x + search_rect.x / 16.0,
+                search_rect.y + search_rect.y / 16.0,
+            ),
+            32.0,
+            0.0,
+            raylib::color::Color::WHITE,
+        );
+    }
+}
+
+fn create_document_from_text(text: &str) -> Document {
+    let stemmer = rust_stemmers::Stemmer::create(rust_stemmers::Algorithm::English);
+    let mut words_map = HashMap::new();
+    let mut current_word = String::new();
+
+    let add_to_map = |word: &str, map: &mut HashMap<String, usize>| {
+        if !word.is_empty() {
+            let word = stemmer.stem(&word.to_lowercase()).to_string();
+            *map.entry(word).or_insert(0) += 1;
+        }
+    };
+
+    for c in text.chars() {
+        if c.is_alphanumeric() || c == '\'' || c == '-' {
+            current_word.push(c);
+        } else {
+            add_to_map(&current_word, &mut words_map);
+            current_word.clear();
+            if !c.is_whitespace() {
+                add_to_map(&c.to_string(), &mut words_map);
+            }
+        }
+    }
+
+    add_to_map(&current_word, &mut words_map);
+
+    Document { words: words_map }
+}
+
+#[derive(Debug)]
+enum FileType {
+    XML,
+}
+
+impl FromStr for FileType {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "xml" | "xhtml" => Ok(Self::XML),
+            x => {
+                eprintln!("[ERR]: File is of unindexable type {x}");
+                Err(())
+            }
+        }
+    }
+}
+
+fn analyze(entry: std::path::PathBuf, model: &mut HashMap<String, Document>) -> Result<(), ()> {
+    if entry.is_file() {
+        match entry.extension() {
+            None => {
+                eprintln!("[ERR]: File is binary or other type of non-indexable file");
+                return Err(());
+            }
+            Some(s) => match s.to_str().unwrap().parse() {
+                Ok(FileType::XML) => {
+                    let file = BufReader::new(File::open(&entry).unwrap());
+                    let parser = xml::EventReader::new(file);
+                    let mut text = String::with_capacity(1024 * 1024);
+                    for e in parser {
+                        match e {
+                            Ok(xml::reader::XmlEvent::Characters(c)) => {
+                                text.push_str(&c);
+                                text.push(' ');
+                            }
+                            Err(e) => {
+                                eprintln!("{}", e);
+                            }
+                            _ => {}
+                        }
+                    }
+                    model.insert(
+                        entry.to_string_lossy().to_string(),
+                        create_document_from_text(&text),
+                    );
+                }
+                Err(()) => {
+                    eprintln!("Ignoring binary file")
+                }
+                x => {
+                    eprintln!("Ignoring {:?} file", x)
+                }
+            },
+        }
+        return Ok(());
+    }
+    let dirs = std::fs::read_dir(&entry).map_err(|e| {
+        eprintln!("[ERR]: Failed to read dir {:?}: {e}", &entry);
+    })?;
+    for e in dirs {
+        let e1 = match &e {
+            Ok(e) => e,
+            Err(err) => {
+                eprintln!("[ERR]: Failed to read file entry {:?}: {}", &e, err);
+                continue;
+            }
+        };
+        _ = analyze(e1.path(), model);
+    }
+    Ok(())
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Document {
+    words: HashMap<String, usize>,
+}
+
+fn do_query(model: &HashMap<String, Document>, terms: &[&str]) -> Vec<String> {
+    let en_stemmer = rust_stemmers::Stemmer::create(rust_stemmers::Algorithm::English);
+    let mut docs = vec![];
+    for (path, data) in model {
+        let mut point = 0.0;
+        for t in terms {
+            let t = en_stemmer.stem(&t.to_lowercase()).to_string();
+            let count = match data.words.get(&t) {
+                None => {
+                    continue;
+                }
+                Some(t) => *t,
+            };
+            let tf = count as f64 / data.words.iter().map(|(_, v)| *v).sum::<usize>() as f64;
+            let idf = (model.iter().count() as f64
+                / model
+                    .iter()
+                    .filter(|(_, d)| d.words.get(&t).is_some())
+                    .count() as f64)
+                .log2();
+            point += tf * idf;
+        }
+        docs.push((path, point));
+    }
+    docs.sort_by(|(_, b1), (_, a1)| a1.total_cmp(b1));
+    docs.iter()
+        .map(|(p, d)| (p, d))
+        .filter(|(_p, d)| **d != 0.0)
+        .map(|(p, _)| p.to_owned().clone())
+        .collect()
+}
