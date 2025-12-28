@@ -3,6 +3,13 @@ use raylib::text::RaylibFont;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs::File, io::BufReader, str::FromStr};
 
+// TODO: Reindex on directory update
+// TODO: Flesh out the settings menu
+// TODO: Animations?
+// TODO: Optimization (when it becomes an issue)
+// TODO: Setup links to applications for different file types to open on click
+// TODO: More keybinds
+
 #[derive(Deserialize, Serialize, Default, Debug)]
 struct Color {
     r: u8,
