@@ -23,6 +23,7 @@ struct Config {
 }
 
 const FONT: &[u8] = include_bytes!("../assets/GeistMonoNerdFontMono-Regular.otf");
+const SETTINGS_ICON: &[u8] = include_bytes!("../assets/settings(1920x1920).png");
 
 fn main() {
     let (mut h, t) = raylib::init()
@@ -106,6 +107,9 @@ fn main() {
     } else {
         h.load_font_from_memory(&t, ".otf", FONT, 64, None).unwrap()
     };
+
+    let settings_icon_image = raylib::prelude::Image::load_image_from_mem(".png", SETTINGS_ICON).unwrap();
+    let settings_icon_texture = h.load_texture_from_image(&t, &settings_icon_image).unwrap();
 
     let bg_color = if let Some(c) = config.background_color {
         raylib::color::Color::new(c.r, c.g, c.b, 255)
@@ -265,6 +269,15 @@ fn main() {
             32.0,
             0.0,
             fg_color,
+        );
+        d.draw_rectangle_rounded(raylib::math::Rectangle::new(w_w as f32 / 128.0, -96.0 + w_h as f32 - w_w as f32 / 128.0, 96.0, 96.0), 0.1, 10, idle_color);
+        d.draw_texture_pro(
+            &settings_icon_texture, 
+            raylib::math::Rectangle::new(0.0, 0.0, 1920.0, 1920.0), 
+            raylib::math::Rectangle::new(w_w as f32 / 128.0 + 16.0, -96.0 + w_h as f32 - w_w as f32 / 128.0 + 16.0, 64.0, 64.0), 
+            raylib::math::Vector2::zero(), 
+            0.0, 
+            raylib::color::Color::WHITE
         );
     }
 }
