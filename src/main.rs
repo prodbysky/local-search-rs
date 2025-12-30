@@ -63,6 +63,8 @@ struct App {
 
     conf: Config,
 
+    display_profile_data: bool,
+
     index_file: std::path::PathBuf,
     boot_time: std::time::Duration,
     boot_index_time: std::time::Duration,
@@ -237,6 +239,7 @@ impl App {
             draw_time: std::time::Duration::from_secs(0),
             last_query_time: std::time::Duration::from_secs(0),
             reindex_time: std::time::Duration::from_secs(0),
+            display_profile_data: false
         }
     }
 
@@ -357,6 +360,13 @@ impl App {
                 self.docs.clear();
                 self.doc_offset = 0.0;
             }
+
+            if self
+                .raylib_handle
+                .is_key_down(raylib::consts::KeyboardKey::KEY_LEFT_CONTROL) && self.raylib_handle.is_key_pressed(raylib::consts::KeyboardKey::KEY_D) {
+                self.display_profile_data = !self.display_profile_data;
+            }
+
             self.update_time = update_time.elapsed();
 
             let mut d = self.raylib_handle.begin_drawing(&self.raylib_thread);
@@ -442,22 +452,25 @@ impl App {
                 raylib::color::Color::WHITE,
             );
             self.draw_time = draw_time.elapsed();
-            d.draw_rectangle(0, w_h - 300, 800, 300, raylib::color::Color::BLACK);
-            d.draw_text_ex(
-                &self.font,
-                &format!("Update time: {} sec.\nDraw time  : {} sec.\nSearch time: {} sec.\nIndex time: {} sec.\nBoot time: {} sec.\nBoot index time: {} sec.", 
-                    self.update_time.as_secs_f32(), 
-                    self.draw_time.as_secs_f32(), 
-                    self.last_query_time.as_secs_f32(), 
-                    self.reindex_time.as_secs_f32(),
-                    self.boot_time.as_secs_f32(),
-                    self.boot_index_time.as_secs_f32()
-                    ),
-                raylib::math::Vector2::new(0.0, (w_h - 300) as f32),
-                32.0,
-                0.0,
-                raylib::color::Color::WHITE,
-            );
+
+            if self.display_profile_data {
+                d.draw_rectangle(0, w_h - 300, 800, 300, raylib::color::Color::new(0, 0, 0, 127));
+                d.draw_text_ex(
+                    &self.font,
+                    &format!("Update time: {} sec.\nDraw time  : {} sec.\nSearch time: {} sec.\nIndex time: {} sec.\nBoot time: {} sec.\nBoot index time: {} sec.", 
+                        self.update_time.as_secs_f32(), 
+                        self.draw_time.as_secs_f32(), 
+                        self.last_query_time.as_secs_f32(), 
+                        self.reindex_time.as_secs_f32(),
+                        self.boot_time.as_secs_f32(),
+                        self.boot_index_time.as_secs_f32()
+                        ),
+                    raylib::math::Vector2::new(0.0, (w_h - 300) as f32),
+                    32.0,
+                    0.0,
+                    raylib::color::Color::WHITE,
+                );
+            }
         }
     }
 }
