@@ -56,7 +56,7 @@ struct App {
 
     conf: Config,
 
-    index_file: std::path::PathBuf
+    index_file: std::path::PathBuf,
 }
 
 impl App {
@@ -79,7 +79,7 @@ impl App {
             .document_directories
             .push(document_base_dir.to_string_lossy().to_string());
         if config_file.exists() {
-            let conf_file_content = std::fs::read_to_string(&config_file).unwrap();
+            let conf_file_content = std::fs::read_to_string(config_file).unwrap();
             config = toml::de::from_str(&conf_file_content).unwrap();
             for p in &mut config.document_directories {
                 let np = std::path::PathBuf::from_str(p).unwrap();
@@ -88,7 +88,7 @@ impl App {
                 *p = copy.to_string_lossy().to_string();
             }
         } else {
-            std::fs::write(&config_file, toml::ser::to_string_pretty(&config).unwrap()).unwrap();
+            std::fs::write(config_file, toml::ser::to_string_pretty(&config).unwrap()).unwrap();
         }
         config
     }
@@ -105,13 +105,12 @@ impl App {
                 let _ = analyze(std::path::PathBuf::from(p), &mut model);
             }
             std::fs::write(
-                &index_file,
+                index_file,
                 serde_json::ser::to_string_pretty(&model).unwrap(),
             )
             .unwrap();
         }
-        model 
-
+        model
     }
 
     pub fn new() -> Self {
@@ -210,7 +209,7 @@ impl App {
             query_box_selected: false,
             scroll_velocity: raylib::math::Vector2::zero(),
             conf: config,
-            index_file
+            index_file,
         }
     }
 
