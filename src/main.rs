@@ -1,7 +1,13 @@
 use raylib::prelude::RaylibDraw;
 use raylib::text::RaylibFont;
-use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fs::File, io::BufReader, str::FromStr};
+use std::{
+    collections::HashMap,
+    io::{BufReader, Read},
+    str::FromStr,
+};
+use serde::{Serialize, Deserialize};
+
+use wincode::{SchemaRead, SchemaWrite};
 
 // TODO: Reindex on directory update
 // TODO: Flesh out the settings menu
@@ -12,14 +18,15 @@ use std::{collections::HashMap, fs::File, io::BufReader, str::FromStr};
 // TODO: Segfault on program exit???
 // TODO: On indexing/refreshing the model do some sort of multithreading so the UI does not hang and also we can report indexing progress
 
-#[derive(Deserialize, Serialize, Default, Debug)]
+#[derive(Serialize, Deserialize, Default, Debug)]
 struct Color {
     r: u8,
     g: u8,
     b: u8,
 }
 
-#[derive(Deserialize, Serialize, Default, Debug)]
+// NOTE: Here we use serde (toml) since its a config file come on guys
+#[derive(Serialize, Deserialize, Default, Debug)]
 struct Config {
     document_directories: Vec<String>,
     font_name: Option<String>,
@@ -56,7 +63,15 @@ struct App {
 
     conf: Config,
 
+    display_profile_data: bool,
+
     index_file: std::path::PathBuf,
+    boot_time: std::time::Duration,
+    boot_index_time: std::time::Duration,
+    update_time: std::time::Duration,
+    draw_time: std::time::Duration,
+    last_query_time: std::time::Duration,
+    reindex_time: std::time::Duration,
 }
 
 impl App {
@@ -66,7 +81,7 @@ impl App {
         document_base_dir.push("local-search");
 
         let config_file = app_dirs.config_dir.join("config.toml");
-        let index_file = app_dirs.state_dir.join("index.json");
+        let index_file = app_dirs.state_dir.join("index.bin");
         std::fs::create_dir_all(&app_dirs.config_dir).unwrap();
         std::fs::create_dir_all(&app_dirs.state_dir).unwrap();
         std::fs::create_dir_all(&document_base_dir).unwrap();
@@ -96,17 +111,22 @@ impl App {
     fn init_model(index_file: &std::path::Path, conf: &Config) -> HashMap<String, Document> {
         let mut model = HashMap::new();
         if index_file.exists() {
-            model = serde_json::de::from_reader(std::io::BufReader::new(
+            let mut b_reader = std::io::BufReader::new(
                 std::fs::File::open(index_file).unwrap(),
-            ))
-            .unwrap();
+            );
+            let mut bytes = vec![];
+            b_reader.read_to_end(&mut bytes).unwrap();
+            model = wincode::deserialize(&bytes).unwrap();
         } else {
             for p in &conf.document_directories {
-                let _ = analyze(std::path::PathBuf::from(p), &mut model);
+                let m = analyze_dir(&std::path::PathBuf::from(p)).unwrap();
+                m.into_iter().for_each(|(k, v)| {
+                    model.insert(k, v);
+                });
             }
             std::fs::write(
                 index_file,
-                serde_json::ser::to_string_pretty(&model).unwrap(),
+                wincode::serialize(&model).unwrap(),
             )
             .unwrap();
         }
@@ -114,6 +134,7 @@ impl App {
     }
 
     pub fn new() -> Self {
+        let init = std::time::Instant::now();
         let (mut h, t) = raylib::init()
             .msaa_4x()
             .size(1280, 720)
@@ -128,7 +149,9 @@ impl App {
 
         let config = Self::init_config(&document_base_dir, &config_file);
 
+        let model_begin = std::time::Instant::now();
         let model = Self::init_model(&index_file, &config);
+        let model_end = model_begin.elapsed();
 
         let font = if let Some(name) = &config.font_name {
             let cache = rust_fontconfig::FcFontCache::build();
@@ -210,18 +233,30 @@ impl App {
             scroll_velocity: raylib::math::Vector2::zero(),
             conf: config,
             index_file,
+            boot_time: init.elapsed(),
+            boot_index_time: model_end,
+            update_time: std::time::Duration::from_secs(0),
+            draw_time: std::time::Duration::from_secs(0),
+            last_query_time: std::time::Duration::from_secs(0),
+            reindex_time: std::time::Duration::from_secs(0),
+            display_profile_data: false
         }
     }
 
     // only reindexes the files (does not refresh the config)
     fn refresh_model(&mut self) {
         self.model.clear();
+        let reindex = std::time::Instant::now();
         for p in &self.conf.document_directories {
-            let _ = analyze(std::path::PathBuf::from(p), &mut self.model);
+            let m = analyze_dir(&std::path::PathBuf::from(p)).unwrap();
+            m.into_iter().for_each(|(k, v)| {
+                self.model.insert(k, v);
+            });
         }
+        self.reindex_time = reindex.elapsed();
         std::fs::write(
             &self.index_file,
-            serde_json::ser::to_string_pretty(&self.model).unwrap(),
+            wincode::serialize(&self.model).unwrap(),
         )
         .unwrap();
     }
@@ -229,9 +264,12 @@ impl App {
     pub fn run(mut self) {
         let label_text = "local search";
         let label_size = self.font.measure_text(label_text, 64.0, 0.0);
+
         while !self.raylib_handle.window_should_close() {
             let w_w = self.raylib_handle.get_screen_width();
             let w_h = self.raylib_handle.get_screen_height();
+
+            let update_time = std::time::Instant::now();
 
             let label_pos = raylib::math::Vector2::new(
                 (w_w as f32 / 2.0) - label_size.x / 2.0,
@@ -304,7 +342,9 @@ impl App {
                     .is_key_down(raylib::consts::KeyboardKey::KEY_ENTER)
                 {
                     let terms: Vec<_> = self.query.split_whitespace().collect();
+                    let t = std::time::Instant::now();
                     self.docs = do_query(&self.model, &terms);
+                    self.last_query_time = t.elapsed();
                     self.doc_offset = 0.0;
                 }
             }
@@ -312,14 +352,26 @@ impl App {
             if self
                 .raylib_handle
                 .is_key_pressed(raylib::consts::KeyboardKey::KEY_R)
+                && !self.query_box_selected
             {
+                let t = std::time::Instant::now();
                 self.refresh_model();
+                self.reindex_time = t.elapsed();
                 self.docs.clear();
                 self.doc_offset = 0.0;
             }
 
+            if self
+                .raylib_handle
+                .is_key_down(raylib::consts::KeyboardKey::KEY_LEFT_CONTROL) && self.raylib_handle.is_key_pressed(raylib::consts::KeyboardKey::KEY_D) {
+                self.display_profile_data = !self.display_profile_data;
+            }
+
+            self.update_time = update_time.elapsed();
+
             let mut d = self.raylib_handle.begin_drawing(&self.raylib_thread);
 
+            let draw_time = std::time::Instant::now();
             d.clear_background(self.bg_color);
 
             for (i, doc) in self.docs.iter().enumerate() {
@@ -399,6 +451,26 @@ impl App {
                 0.0,
                 raylib::color::Color::WHITE,
             );
+            self.draw_time = draw_time.elapsed();
+
+            if self.display_profile_data {
+                d.draw_rectangle(0, w_h - 300, 800, 300, raylib::color::Color::new(0, 0, 0, 127));
+                d.draw_text_ex(
+                    &self.font,
+                    &format!("Update time: {} sec.\nDraw time  : {} sec.\nSearch time: {} sec.\nIndex time: {} sec.\nBoot time: {} sec.\nBoot index time: {} sec.", 
+                        self.update_time.as_secs_f32(), 
+                        self.draw_time.as_secs_f32(), 
+                        self.last_query_time.as_secs_f32(), 
+                        self.reindex_time.as_secs_f32(),
+                        self.boot_time.as_secs_f32(),
+                        self.boot_index_time.as_secs_f32()
+                        ),
+                    raylib::math::Vector2::new(0.0, (w_h - 300) as f32),
+                    32.0,
+                    0.0,
+                    raylib::color::Color::WHITE,
+                );
+            }
         }
     }
 }
@@ -454,62 +526,68 @@ impl FromStr for FileType {
     }
 }
 
-fn analyze(entry: std::path::PathBuf, model: &mut HashMap<String, Document>) -> Result<(), ()> {
-    if entry.is_file() {
-        match entry.extension() {
-            None => {
-                eprintln!("[ERR]: File is binary or other type of non-indexable file");
-                return Err(());
-            }
-            Some(s) => match s.to_str().unwrap().parse() {
-                Ok(FileType::Xml) => {
-                    let file = BufReader::new(File::open(&entry).unwrap());
-                    let parser = xml::EventReader::new(file);
-                    let mut text = String::with_capacity(1024 * 1024);
-                    for e in parser {
-                        match e {
-                            Ok(xml::reader::XmlEvent::Characters(c)) => {
-                                text.push_str(&c);
-                                text.push(' ');
-                            }
-                            Err(e) => {
-                                eprintln!("{}", e);
-                            }
-                            _ => {}
-                        }
-                    }
-                    model.insert(
-                        entry.to_string_lossy().to_string(),
-                        create_document_from_text(&text),
-                    );
-                }
-                Err(()) => {
-                    eprintln!("Ignoring binary file")
-                }
-                x => {
-                    eprintln!("Ignoring {:?} file", x)
-                }
-            },
+
+fn analyze_file(p: &std::path::Path) -> Result<(String, Document), ()> {
+    match p.extension() {
+        None => {
+            eprintln!("[ERR]: File is binary or other type of non-indexable file");
+            return Err(());
         }
-        return Ok(());
-    }
-    let dirs = std::fs::read_dir(&entry).map_err(|e| {
-        eprintln!("[ERR]: Failed to read dir {:?}: {e}", &entry);
-    })?;
-    for e in dirs {
-        let e1 = match &e {
-            Ok(e) => e,
-            Err(err) => {
-                eprintln!("[ERR]: Failed to read file entry {:?}: {}", &e, err);
-                continue;
+        Some(s) => match s.to_str().unwrap().parse() {
+            Ok(FileType::Xml) => {
+                let file = BufReader::new(std::fs::File::open(p).unwrap());
+                let parser = xml::EventReader::new(file);
+                let mut text = String::with_capacity(1024 * 1024);
+                for e in parser {
+                    match e {
+                        Ok(xml::reader::XmlEvent::Characters(c)) => {
+                            text.push_str(&c);
+                            text.push(' ');
+                        }
+                        Err(e) => {
+                            eprintln!("{}", e);
+                        }
+                        _ => {}
+                    }
+                }
+                Ok((
+                    p.to_string_lossy().to_string(),
+                    create_document_from_text(&text),
+                ))
             }
-        };
-        _ = analyze(e1.path(), model);
+            Err(()) => {
+                eprintln!("Ignoring binary file");
+                Err(())
+            }
+        },
     }
-    Ok(())
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+fn analyze_dir(p: &std::path::Path) -> Result<HashMap<String, Document>, ()> {
+    let mut map = HashMap::new();
+    let mut on_going = vec![];
+    for d in p.read_dir().unwrap() {
+        let d = d.unwrap();
+        if d.metadata().unwrap().is_file() {
+            let Ok((p, f)) = analyze_file(&d.path()) else {
+                continue;
+            };
+            map.insert(p, f);
+        } else {
+            let process = std::thread::spawn(move || analyze_dir(&d.path()));
+            on_going.push(process);
+        }
+    }
+    for p in on_going {
+        let x = p.join().unwrap().unwrap();
+        x.into_iter().for_each(|(k, v)| {
+            map.insert(k, v);
+        });
+    }
+    Ok(map)
+}
+
+#[derive(Debug, SchemaRead, SchemaWrite)]
 struct Document {
     words: HashMap<String, usize>,
 }
