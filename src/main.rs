@@ -2,7 +2,6 @@ use raylib::prelude::RaylibDraw;
 use raylib::text::RaylibFont;
 use std::{
     collections::HashMap,
-    fs::File,
     io::{BufReader, Read},
     str::FromStr,
 };
@@ -514,60 +513,6 @@ impl FromStr for FileType {
     }
 }
 
-fn analyze(entry: std::path::PathBuf, model: &mut HashMap<String, Document>) -> Result<(), ()> {
-    if entry.is_file() {
-        match entry.extension() {
-            None => {
-                eprintln!("[ERR]: File is binary or other type of non-indexable file");
-                return Err(());
-            }
-            Some(s) => match s.to_str().unwrap().parse() {
-                Ok(FileType::Xml) => {
-                    let file = BufReader::new(File::open(&entry).unwrap());
-                    let parser = xml::EventReader::new(file);
-                    let mut text = String::with_capacity(1024 * 1024);
-                    for e in parser {
-                        match e {
-                            Ok(xml::reader::XmlEvent::Characters(c)) => {
-                                text.push_str(&c);
-                                text.push(' ');
-                            }
-                            Err(e) => {
-                                eprintln!("{}", e);
-                            }
-                            _ => {}
-                        }
-                    }
-                    model.insert(
-                        entry.to_string_lossy().to_string(),
-                        create_document_from_text(&text),
-                    );
-                }
-                Err(()) => {
-                    eprintln!("Ignoring binary file")
-                }
-                x => {
-                    eprintln!("Ignoring {:?} file", x)
-                }
-            },
-        }
-        return Ok(());
-    }
-    let dirs = std::fs::read_dir(&entry).map_err(|e| {
-        eprintln!("[ERR]: Failed to read dir {:?}: {e}", &entry);
-    })?;
-    for e in dirs {
-        let e1 = match &e {
-            Ok(e) => e,
-            Err(err) => {
-                eprintln!("[ERR]: Failed to read file entry {:?}: {}", &e, err);
-                continue;
-            }
-        };
-        _ = analyze(e1.path(), model);
-    }
-    Ok(())
-}
 
 fn analyze_file(p: &std::path::Path) -> Result<(String, Document), ()> {
     match p.extension() {
