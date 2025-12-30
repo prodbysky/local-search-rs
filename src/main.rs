@@ -1,12 +1,14 @@
 use raylib::prelude::RaylibDraw;
 use raylib::text::RaylibFont;
-use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fs::File,
-    io::BufReader,
+    io::{BufReader, Read},
     str::FromStr,
 };
+use serde::{Serialize, Deserialize};
+
+use wincode::{SchemaRead, SchemaWrite};
 
 // TODO: Reindex on directory update
 // TODO: Flesh out the settings menu
@@ -17,14 +19,15 @@ use std::{
 // TODO: Segfault on program exit???
 // TODO: On indexing/refreshing the model do some sort of multithreading so the UI does not hang and also we can report indexing progress
 
-#[derive(Deserialize, Serialize, Default, Debug)]
+#[derive(Serialize, Deserialize, Default, Debug)]
 struct Color {
     r: u8,
     g: u8,
     b: u8,
 }
 
-#[derive(Deserialize, Serialize, Default, Debug)]
+// NOTE: Here we use serde (toml) since its a config file come on guys
+#[derive(Serialize, Deserialize, Default, Debug)]
 struct Config {
     document_directories: Vec<String>,
     font_name: Option<String>,
@@ -62,17 +65,11 @@ struct App {
     conf: Config,
 
     index_file: std::path::PathBuf,
-
     boot_time: std::time::Duration,
-
     boot_index_time: std::time::Duration,
-
     update_time: std::time::Duration,
-
     draw_time: std::time::Duration,
-
     last_query_time: std::time::Duration,
-
     reindex_time: std::time::Duration,
 }
 
@@ -83,7 +80,7 @@ impl App {
         document_base_dir.push("local-search");
 
         let config_file = app_dirs.config_dir.join("config.toml");
-        let index_file = app_dirs.state_dir.join("index.json");
+        let index_file = app_dirs.state_dir.join("index.bin");
         std::fs::create_dir_all(&app_dirs.config_dir).unwrap();
         std::fs::create_dir_all(&app_dirs.state_dir).unwrap();
         std::fs::create_dir_all(&document_base_dir).unwrap();
@@ -113,10 +110,12 @@ impl App {
     fn init_model(index_file: &std::path::Path, conf: &Config) -> HashMap<String, Document> {
         let mut model = HashMap::new();
         if index_file.exists() {
-            model = serde_json::de::from_reader(std::io::BufReader::new(
+            let mut b_reader = std::io::BufReader::new(
                 std::fs::File::open(index_file).unwrap(),
-            ))
-            .unwrap();
+            );
+            let mut bytes = vec![];
+            b_reader.read_to_end(&mut bytes).unwrap();
+            model = wincode::deserialize(&bytes).unwrap();
         } else {
             for p in &conf.document_directories {
                 let m = analyze_dir(&std::path::PathBuf::from(p)).unwrap();
@@ -126,7 +125,7 @@ impl App {
             }
             std::fs::write(
                 index_file,
-                serde_json::ser::to_string_pretty(&model).unwrap(),
+                wincode::serialize(&model).unwrap(),
             )
             .unwrap();
         }
@@ -255,7 +254,7 @@ impl App {
         self.reindex_time = reindex.elapsed();
         std::fs::write(
             &self.index_file,
-            serde_json::ser::to_string_pretty(&self.model).unwrap(),
+            wincode::serialize(&self.model).unwrap(),
         )
         .unwrap();
     }
@@ -630,7 +629,7 @@ fn analyze_dir(p: &std::path::Path) -> Result<HashMap<String, Document>, ()> {
     Ok(map)
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, SchemaRead, SchemaWrite)]
 struct Document {
     words: HashMap<String, usize>,
 }
