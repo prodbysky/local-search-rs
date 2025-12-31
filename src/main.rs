@@ -1,9 +1,7 @@
 use raylib::prelude::RaylibDraw;
 use raylib::text::RaylibFont;
 use std::{
-    collections::HashMap,
-    io::{BufReader, Read},
-    str::FromStr,
+    collections::HashMap, io::{BufReader, Read}, str::FromStr
 };
 use serde::{Serialize, Deserialize};
 
@@ -511,6 +509,7 @@ fn create_document_from_text(text: &str) -> Document {
 #[derive(Debug)]
 enum FileType {
     Xml,
+    Pdf,
 }
 
 impl FromStr for FileType {
@@ -518,6 +517,7 @@ impl FromStr for FileType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "xml" | "xhtml" => Ok(Self::Xml),
+            "pdf" => Ok(Self::Pdf),
             x => {
                 eprintln!("[ERR]: File is of unindexable type {x}");
                 Err(())
@@ -550,6 +550,19 @@ fn analyze_file(p: &std::path::Path) -> Result<(String, Document), ()> {
                         _ => {}
                     }
                 }
+                Ok((
+                    p.to_string_lossy().to_string(),
+                    create_document_from_text(&text),
+                ))
+            }
+            Ok(FileType::Pdf) => {
+                let doc = lopdf::Document::load(&p).unwrap();
+                if doc.is_encrypted() {
+                    eprintln!("[WARN]: Skipping encrypted .pdf file {}", p.display());
+                    return Err(());
+                }
+                let page_nums: Vec<u32> = doc.get_pages().into_keys().collect();
+                let text = doc.extract_text(&page_nums).unwrap();
                 Ok((
                     p.to_string_lossy().to_string(),
                     create_document_from_text(&text),

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+lopdf = "0.38.0"
 platform-dirs = "0.3.0"
 raylib = "5.5.1"
 rust-fontconfig = "1.2.1"
