@@ -470,6 +470,10 @@ impl App {
                 );
             }
         }
+        // NOTE: Because the drop order causes the raylib handle to be closed before any assets get
+        // unloaded we HAVE to drop them manually before EOL
+        drop(self.font);
+        drop(self.setttings_icon);
     }
 }
 
