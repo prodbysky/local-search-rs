@@ -47,7 +47,7 @@ struct App {
     idle_color: raylib::color::Color,
     hover_color: raylib::color::Color,
     click_color: raylib::color::Color,
-    setttings_icon: raylib::texture::Texture2D,
+    settings_icon: raylib::texture::Texture2D,
 
     model: HashMap<String, Document>,
     docs: Vec<String>,
@@ -221,7 +221,7 @@ impl App {
             idle_color,
             hover_color,
             click_color,
-            setttings_icon: settings_icon_texture,
+            settings_icon: settings_icon_texture,
             doc_offset: 0.0,
             docs: vec![],
             model,
@@ -436,7 +436,7 @@ impl App {
                 self.idle_color,
             );
             d.draw_texture_pro(
-                &self.setttings_icon,
+                &self.settings_icon,
                 raylib::math::Rectangle::new(0.0, 0.0, 1920.0, 1920.0),
                 raylib::math::Rectangle::new(
                     w_w as f32 / 128.0 + 16.0,
@@ -472,7 +472,7 @@ impl App {
         // NOTE: Because the drop order causes the raylib handle to be closed before any assets get
         // unloaded we HAVE to drop them manually before EOL
         drop(self.font);
-        drop(self.setttings_icon);
+        drop(self.settings_icon);
     }
 }
 
