@@ -13,7 +13,6 @@ use wincode::{SchemaRead, SchemaWrite};
 // TODO: Optimization (when it becomes an issue)
 // TODO: Setup links to applications for different file types to open on click
 // TODO: More keybinds
-// TODO: Segfault on program exit???
 // TODO: On indexing/refreshing the model do some sort of multithreading so the UI does not hang and also we can report indexing progress
 
 #[derive(Serialize, Deserialize, Default, Debug)]
