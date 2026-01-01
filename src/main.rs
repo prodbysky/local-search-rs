@@ -328,9 +328,13 @@ impl App {
                 }
 
                 while let Some(k) = self.raylib_handle.get_key_pressed() {
-                    let a = k as i32 as u8 as char;
-                    if a.is_alphanumeric() || a == ' ' {
-                        self.query.push(a.to_ascii_lowercase());
+                    let k = char::from_u32(k as u32);
+                    if let Some(k) = k {
+                        if k.is_ascii_alphanumeric() || k == ' ' {
+                            if !k.is_ascii_control() {
+                                self.query.push(k.to_ascii_lowercase());
+                            }
+                        }
                     }
                 }
 
