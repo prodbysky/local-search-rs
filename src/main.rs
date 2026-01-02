@@ -36,7 +36,6 @@ struct Config {
 }
 
 const FONT: &[u8] = include_bytes!("../assets/GeistMonoNerdFontMono-Regular.otf");
-const SETTINGS_ICON: &[u8] = include_bytes!("../assets/settings(1920x1920).png");
 
 struct App {
     raylib_thread: raylib::prelude::RaylibThread,
@@ -47,7 +46,6 @@ struct App {
     idle_color: raylib::color::Color,
     hover_color: raylib::color::Color,
     click_color: raylib::color::Color,
-    settings_icon: raylib::texture::Texture2D,
 
     model: HashMap<String, Document>,
     docs: Vec<String>,
@@ -178,10 +176,6 @@ impl App {
             h.load_font_from_memory(&t, ".otf", FONT, 64, None).unwrap()
         };
 
-        let settings_icon_image =
-            raylib::prelude::Image::load_image_from_mem(".png", SETTINGS_ICON).unwrap();
-        let settings_icon_texture = h.load_texture_from_image(&t, &settings_icon_image).unwrap();
-
         let bg_color = if let Some(c) = &config.background_color {
             raylib::color::Color::new(c.r, c.g, c.b, 255)
         } else {
@@ -221,7 +215,6 @@ impl App {
             idle_color,
             hover_color,
             click_color,
-            settings_icon: settings_icon_texture,
             doc_offset: 0.0,
             docs: vec![],
             model,
@@ -439,19 +432,6 @@ impl App {
                 10,
                 self.idle_color,
             );
-            d.draw_texture_pro(
-                &self.settings_icon,
-                raylib::math::Rectangle::new(0.0, 0.0, 1920.0, 1920.0),
-                raylib::math::Rectangle::new(
-                    w_w as f32 / 128.0 + 16.0,
-                    -96.0 + w_h as f32 - w_w as f32 / 128.0 + 16.0,
-                    64.0,
-                    64.0,
-                ),
-                raylib::math::Vector2::zero(),
-                0.0,
-                raylib::color::Color::WHITE,
-            );
             self.draw_time = draw_time.elapsed();
 
             if self.display_profile_data {
@@ -476,7 +456,6 @@ impl App {
         // NOTE: Because the drop order causes the raylib handle to be closed before any assets get
         // unloaded we HAVE to drop them manually before EOL
         drop(self.font);
-        drop(self.settings_icon);
     }
 }
 
