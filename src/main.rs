@@ -1,11 +1,8 @@
 mod search_model;
 use raylib::prelude::RaylibDraw;
 use raylib::text::RaylibFont;
-use std::{
-    collections::HashMap, io::Read, str::FromStr
-};
-use serde::{Serialize, Deserialize, Serializer, Deserializer};
-
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::{collections::HashMap, io::Read, str::FromStr};
 
 #[derive(Default, Debug, Clone, Copy)]
 struct Color {
@@ -16,9 +13,7 @@ struct Color {
 
 impl Color {
     pub const fn new(r: u8, g: u8, b: u8) -> Self {
-        Self {
-            r, g, b
-        }
+        Self { r, g, b }
     }
 
     pub const fn into_raylib(self) -> raylib::color::Color {
@@ -42,7 +37,8 @@ impl<'de> Deserialize<'de> for Color {
         D: Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
-        let s = s.strip_prefix('#')
+        let s = s
+            .strip_prefix('#')
             .ok_or_else(|| serde::de::Error::custom("expected #RRGGBB"))?;
 
         if s.len() != 6 {
@@ -64,40 +60,40 @@ enum Theme {
     Default,
     CatppuccinLatte,
     CatppuccinMocha,
-    Custom(ThemeColors)
+    Custom(ThemeColors),
 }
 
 impl Theme {
     const DEFAULT_COLORS: ThemeColors = ThemeColors {
         background_color: Color::new(0x18, 0x18, 0x18),
         foreground_color: Color::new(0xcc, 0xcc, 0xcc),
-        idle_color:       Color::new(0x20, 0x20, 0x20),
-        hovered_color:    Color::new(0x30, 0x30, 0x30),
-        clicked_color:    Color::new(0x40, 0x40, 0x40),
+        idle_color: Color::new(0x20, 0x20, 0x20),
+        hovered_color: Color::new(0x30, 0x30, 0x30),
+        clicked_color: Color::new(0x40, 0x40, 0x40),
     };
 
     const CAT_LATTE_COLORS: ThemeColors = ThemeColors {
         background_color: Color::new(0xef, 0xf1, 0xf5), // BASE
         foreground_color: Color::new(0x4c, 0x4f, 0x69), // TEXT
-        idle_color:       Color::new(0xdc, 0x8a, 0x78), // ROSEWATER
-        hovered_color:    Color::new(0xdd, 0x78, 0x78), // FLAMINGO
-        clicked_color:    Color::new(0xea, 0x76, 0xcb), // PINK
+        idle_color: Color::new(0xdc, 0x8a, 0x78),       // ROSEWATER
+        hovered_color: Color::new(0xdd, 0x78, 0x78),    // FLAMINGO
+        clicked_color: Color::new(0xea, 0x76, 0xcb),    // PINK
     };
 
     const CAT_MOCHA_COLORS: ThemeColors = ThemeColors {
         background_color: Color::new(0x1e, 0x1e, 0x2e), // BASE
         foreground_color: Color::new(0xcd, 0xd6, 0xf4), // TEXT
-        idle_color:       Color::new(0x31, 0x32, 0x44), // SURFACE 0
-        hovered_color:    Color::new(0x45, 0x47, 0x5a), // SURFACE 1
-        clicked_color:    Color::new(0x58, 0x5b, 0x70), // SURFACE 2
+        idle_color: Color::new(0x31, 0x32, 0x44),       // SURFACE 0
+        hovered_color: Color::new(0x45, 0x47, 0x5a),    // SURFACE 1
+        clicked_color: Color::new(0x58, 0x5b, 0x70),    // SURFACE 2
     };
 
     pub fn get_all_colors(&self) -> &ThemeColors {
         match self {
-            Self::Default         => &Self::DEFAULT_COLORS,
+            Self::Default => &Self::DEFAULT_COLORS,
             Self::CatppuccinLatte => &Self::CAT_LATTE_COLORS,
             Self::CatppuccinMocha => &Self::CAT_MOCHA_COLORS,
-            Self::Custom(c)       => &c
+            Self::Custom(c) => &c,
         }
     }
 }
@@ -110,7 +106,6 @@ struct ThemeColors {
     hovered_color: Color,
     clicked_color: Color,
 }
-
 
 // NOTE: Here we use serde (toml) since its a config file come on guys
 #[derive(Serialize, Deserialize, Default, Debug)]
@@ -152,30 +147,99 @@ struct App {
     draw_time: std::time::Duration,
     last_query_time: std::time::Duration,
     reindex_time: std::time::Duration,
-
 }
 
 impl App {
-    fn init_directories() -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
-        let app_dirs = platform_dirs::AppDirs::new(Some("local-search"), false).unwrap();
-        let mut document_base_dir = platform_dirs::UserDirs::new().unwrap().document_dir;
+    fn init_directories() -> Option<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf)> {
+        let app_dirs = match platform_dirs::AppDirs::new(Some("local-search"), false) {
+            Some(dirs) => dirs,
+            None => {
+                eprintln!("[ERR]: Failed to get app directories (for config, state)");
+                return None;
+            }
+        };
+        let mut document_base_dir = match platform_dirs::UserDirs::new() {
+            Some(d) => d.document_dir,
+            None => {
+                eprintln!("[ERR]: Failed to get user directories (for document storage)");
+                return None;
+            }
+        };
         document_base_dir.push("local-search");
 
         let config_file = app_dirs.config_dir.join("config.toml");
         let index_file = app_dirs.state_dir.join("index.bin");
-        std::fs::create_dir_all(&app_dirs.config_dir).unwrap();
-        std::fs::create_dir_all(&app_dirs.state_dir).unwrap();
-        std::fs::create_dir_all(&document_base_dir).unwrap();
-        (document_base_dir, config_file, index_file)
+        if !app_dirs.config_dir.exists() {
+            eprintln!(
+                "[INFO]: Config directory {} does not exist, creating it...",
+                &app_dirs.config_dir.display()
+            );
+            match std::fs::create_dir_all(&app_dirs.config_dir) {
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!(
+                        "[ERR]: Failed to create config dir {}: {e}",
+                        app_dirs.config_dir.display()
+                    );
+                    return None;
+                }
+            };
+        }
+        if !app_dirs.state_dir.exists() {
+            eprintln!(
+                "[INFO]: State directory {} does not exist, creating it...",
+                &app_dirs.state_dir.display()
+            );
+            match std::fs::create_dir_all(&app_dirs.state_dir) {
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!(
+                        "[ERR]: Failed to create state dir {}: {e}",
+                        app_dirs.state_dir.display()
+                    );
+                    return None;
+                }
+            };
+        }
+        if !document_base_dir.exists() {
+            eprintln!(
+                "[INFO]: Document directory {} does not exist, creating it...",
+                &document_base_dir.display()
+            );
+            std::fs::create_dir_all(&document_base_dir).unwrap();
+            match std::fs::create_dir_all(&document_base_dir) {
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!(
+                        "[ERR]: Failed to create document storage dir {}: {e}",
+                        document_base_dir.display()
+                    );
+                    return None;
+                }
+            };
+        }
+        Some((document_base_dir, config_file, index_file))
     }
 
-    fn init_config(document_base_dir: &std::path::Path, config_file: &std::path::Path) -> Option<Config> {
+    fn init_config(
+        document_base_dir: &std::path::Path,
+        config_file: &std::path::Path,
+    ) -> Option<Config> {
         let mut config = Config::default();
         config
             .document_directories
             .push(document_base_dir.to_string_lossy().to_string());
         if config_file.exists() {
-            let conf_file_content = std::fs::read_to_string(config_file).unwrap();
+            let conf_file_content = match std::fs::read_to_string(config_file) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!(
+                        "[ERR]: Failed to read config file {}: {e}",
+                        config_file.display()
+                    );
+                    return None;
+                }
+            };
             config = match toml::de::from_str(&conf_file_content) {
                 Ok(c) => c,
                 Err(e) => {
@@ -184,23 +248,48 @@ impl App {
                 }
             };
             for p in &mut config.document_directories {
-                let np = std::path::PathBuf::from_str(p).unwrap();
+                let np = match std::path::PathBuf::from_str(p) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        eprintln!("[ERR]: Failed to parse document directory string {p}: {e}");
+                        return None;
+                    }
+                };
                 let mut copy = document_base_dir.to_path_buf();
                 copy.push(np);
                 *p = copy.to_string_lossy().to_string();
             }
         } else {
-            std::fs::write(config_file, toml::ser::to_string_pretty(&config).unwrap()).unwrap();
+            match std::fs::write(
+                config_file,
+                match toml::ser::to_string_pretty(&config) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("[ERR]: Failed to serialize {config:?}: {e}");
+                        return None;
+                    }
+                },
+            ) {
+                Ok(()) => {}
+                Err(e) => {
+                    eprintln!(
+                        "[ERR]: Failed to write config to {}: {e}",
+                        config_file.display()
+                    );
+                    return None;
+                }
+            };
         }
         Some(config)
     }
 
-    fn init_model(index_file: &std::path::Path, conf: &Config) -> HashMap<String, search_model::Document> {
+    fn init_model(
+        index_file: &std::path::Path,
+        conf: &Config,
+    ) -> HashMap<String, search_model::Document> {
         let mut model = HashMap::new();
         if index_file.exists() {
-            let mut b_reader = std::io::BufReader::new(
-                std::fs::File::open(index_file).unwrap(),
-            );
+            let mut b_reader = std::io::BufReader::new(std::fs::File::open(index_file).unwrap());
             let mut bytes = vec![];
             b_reader.read_to_end(&mut bytes).unwrap();
             model = wincode::deserialize(&bytes).unwrap();
@@ -211,11 +300,7 @@ impl App {
                     model.insert(k, v);
                 });
             }
-            std::fs::write(
-                index_file,
-                wincode::serialize(&model).unwrap(),
-            )
-            .unwrap();
+            std::fs::write(index_file, wincode::serialize(&model).unwrap()).unwrap();
         }
         model
     }
@@ -230,18 +315,25 @@ impl App {
             .log_level(raylib::ffi::TraceLogLevel::LOG_FATAL)
             .build();
 
+        eprintln!("[INFO]: Raylib initialized");
+
         h.set_exit_key(None);
 
-        let (document_base_dir, config_file, index_file) = Self::init_directories();
+        let (document_base_dir, config_file, index_file) = Self::init_directories()?;
+        eprintln!("[INFO]: Directories initialized");
 
         let config = match Self::init_config(&document_base_dir, &config_file) {
             Some(c) => c,
             None => return None,
         };
 
+        eprintln!("[INFO]: Configuration (toml) initialized");
+
         let model_begin = std::time::Instant::now();
         let model = Self::init_model(&index_file, &config);
         let model_end = model_begin.elapsed();
+
+        eprintln!("[INFO]: Search model initialized");
 
         let font = if let Some(name) = &config.font_name {
             let cache = rust_fontconfig::FcFontCache::build();
@@ -271,6 +363,8 @@ impl App {
             h.load_font_from_memory(&t, ".otf", FONT, 64, None).unwrap()
         };
 
+        eprintln!("[INFO]: Font loaded");
+
         let colors = config.theme.get_all_colors();
 
         let bg_color = colors.background_color.into_raylib();
@@ -279,33 +373,35 @@ impl App {
         let hover_color = colors.hovered_color.into_raylib();
         let click_color = colors.clicked_color.into_raylib();
 
-        Some(
-            Self {
-                raylib_thread: t,
-                raylib_handle: h,
-                font,
-                bg_color,
-                fg_color,
-                idle_color,
-                hover_color,
-                click_color,
-                doc_offset: 0.0,
-                docs: vec![],
-                model,
-                query: String::new(),
-                query_box_selected: false,
-                scroll_velocity: raylib::math::Vector2::zero(),
-                conf: config,
-                index_file,
-                boot_time: init.elapsed(),
-                boot_index_time: model_end,
-                update_time: std::time::Duration::from_secs(0),
-                draw_time: std::time::Duration::from_secs(0),
-                last_query_time: std::time::Duration::from_secs(0),
-                reindex_time: std::time::Duration::from_secs(0),
-                display_profile_data: false
-            }
-        )
+        eprintln!("[INFO]: Theme initialized");
+
+        eprintln!("[INFO]: All state is hopefully ready to go");
+
+        Some(Self {
+            raylib_thread: t,
+            raylib_handle: h,
+            font,
+            bg_color,
+            fg_color,
+            idle_color,
+            hover_color,
+            click_color,
+            doc_offset: 0.0,
+            docs: vec![],
+            model,
+            query: String::new(),
+            query_box_selected: false,
+            scroll_velocity: raylib::math::Vector2::zero(),
+            conf: config,
+            index_file,
+            boot_time: init.elapsed(),
+            boot_index_time: model_end,
+            update_time: std::time::Duration::from_secs(0),
+            draw_time: std::time::Duration::from_secs(0),
+            last_query_time: std::time::Duration::from_secs(0),
+            reindex_time: std::time::Duration::from_secs(0),
+            display_profile_data: false,
+        })
     }
 
     // only reindexes the files (does not refresh the config)
@@ -319,11 +415,7 @@ impl App {
             });
         }
         self.reindex_time = reindex.elapsed();
-        std::fs::write(
-            &self.index_file,
-            wincode::serialize(&self.model).unwrap(),
-        )
-        .unwrap();
+        std::fs::write(&self.index_file, wincode::serialize(&self.model).unwrap()).unwrap();
     }
 
     pub fn run(mut self) {
@@ -432,7 +524,11 @@ impl App {
 
             if self
                 .raylib_handle
-                .is_key_down(raylib::consts::KeyboardKey::KEY_LEFT_CONTROL) && self.raylib_handle.is_key_pressed(raylib::consts::KeyboardKey::KEY_D) {
+                .is_key_down(raylib::consts::KeyboardKey::KEY_LEFT_CONTROL)
+                && self
+                    .raylib_handle
+                    .is_key_pressed(raylib::consts::KeyboardKey::KEY_D)
+            {
                 self.display_profile_data = !self.display_profile_data;
             }
 
@@ -499,13 +595,19 @@ impl App {
             self.draw_time = draw_time.elapsed();
 
             if self.display_profile_data {
-                d.draw_rectangle(0, w_h - 300, w_w, 300, raylib::color::Color::new(0, 0, 0, 127));
+                d.draw_rectangle(
+                    0,
+                    w_h - 300,
+                    w_w,
+                    300,
+                    raylib::color::Color::new(0, 0, 0, 127),
+                );
                 d.draw_text_ex(
                     &self.font,
                     &format!("Update time: {} sec.\nDraw time  : {} sec.\nSearch time: {} sec.\nIndex time: {} sec.\nBoot time: {} sec.\nBoot index time: {} sec.", 
-                        self.update_time.as_secs_f32(), 
-                        self.draw_time.as_secs_f32(), 
-                        self.last_query_time.as_secs_f32(), 
+                        self.update_time.as_secs_f32(),
+                        self.draw_time.as_secs_f32(),
+                        self.last_query_time.as_secs_f32(),
                         self.reindex_time.as_secs_f32(),
                         self.boot_time.as_secs_f32(),
                         self.boot_index_time.as_secs_f32()
@@ -529,5 +631,3 @@ fn main() {
         None => {}
     }
 }
-
-

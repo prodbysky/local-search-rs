@@ -1,4 +1,4 @@
-use std::{collections::HashMap, str::FromStr, io::BufReader};
+use std::{collections::HashMap, io::BufReader, str::FromStr};
 use wincode::{SchemaRead, SchemaWrite};
 
 fn create_document_from_text(text: &str) -> Document {
@@ -49,7 +49,6 @@ impl FromStr for FileType {
         }
     }
 }
-
 
 fn analyze_file(p: &std::path::Path) -> Result<(String, Document), ()> {
     match p.extension() {
