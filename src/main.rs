@@ -3,7 +3,7 @@ use raylib::text::RaylibFont;
 use std::{
     collections::HashMap, io::{BufReader, Read}, str::FromStr
 };
-use serde::{Serialize, Deserialize};
+use serde::{Serialize, Deserialize, Serializer, Deserializer};
 
 use wincode::{SchemaRead, SchemaWrite};
 
@@ -15,24 +15,117 @@ use wincode::{SchemaRead, SchemaWrite};
 // TODO: More keybinds
 // TODO: On indexing/refreshing the model do some sort of multithreading so the UI does not hang and also we can report indexing progress
 
-#[derive(Serialize, Deserialize, Default, Debug)]
+#[derive(Default, Debug, Clone, Copy)]
 struct Color {
     r: u8,
     g: u8,
     b: u8,
 }
 
+impl Color {
+    pub const fn new(r: u8, g: u8, b: u8) -> Self {
+        Self {
+            r, g, b
+        }
+    }
+
+    pub const fn into_raylib(self) -> raylib::color::Color {
+        raylib::color::Color::new(self.r, self.g, self.b, 255)
+    }
+}
+
+impl Serialize for Color {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let s = format!("#{:02x}{:02x}{:02x}", self.r, self.g, self.b);
+        serializer.serialize_str(&s)
+    }
+}
+
+impl<'de> Deserialize<'de> for Color {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        let s = s.strip_prefix('#')
+            .ok_or_else(|| serde::de::Error::custom("expected #RRGGBB"))?;
+
+        if s.len() != 6 {
+            return Err(serde::de::Error::custom("expected #RRGGBB"));
+        }
+
+        let r = u8::from_str_radix(&s[0..2], 16).map_err(serde::de::Error::custom)?;
+        let g = u8::from_str_radix(&s[2..4], 16).map_err(serde::de::Error::custom)?;
+        let b = u8::from_str_radix(&s[4..6], 16).map_err(serde::de::Error::custom)?;
+
+        Ok(Color { r, g, b })
+    }
+}
+
+#[derive(Serialize, Deserialize, Default, Debug)]
+#[serde(rename_all = "kebab-case")]
+enum Theme {
+    #[default]
+    Default,
+    CatppuccinLatte,
+    CatppuccinMocha,
+    Custom(ThemeColors)
+}
+
+impl Theme {
+    const DEFAULT_COLORS: ThemeColors = ThemeColors {
+        background_color: Color::new(0x18, 0x18, 0x18),
+        foreground_color: Color::new(0xcc, 0xcc, 0xcc),
+        idle_color:       Color::new(0x20, 0x20, 0x20),
+        hovered_color:    Color::new(0x30, 0x30, 0x30),
+        clicked_color:    Color::new(0x40, 0x40, 0x40),
+    };
+
+    const CAT_LATTE_COLORS: ThemeColors = ThemeColors {
+        background_color: Color::new(0xef, 0xf1, 0xf5), // BASE
+        foreground_color: Color::new(0x4c, 0x4f, 0x69), // TEXT
+        idle_color:       Color::new(0xdc, 0x8a, 0x78), // ROSEWATER
+        hovered_color:    Color::new(0xdd, 0x78, 0x78), // FLAMINGO
+        clicked_color:    Color::new(0xea, 0x76, 0xcb), // PINK
+    };
+
+    const CAT_MOCHA_COLORS: ThemeColors = ThemeColors {
+        background_color: Color::new(0x1e, 0x1e, 0x2e), // BASE
+        foreground_color: Color::new(0xcd, 0xd6, 0xf4), // TEXT
+        idle_color:       Color::new(0x31, 0x32, 0x44), // SURFACE 0
+        hovered_color:    Color::new(0x45, 0x47, 0x5a), // SURFACE 1
+        clicked_color:    Color::new(0x58, 0x5b, 0x70), // SURFACE 2
+    };
+
+    pub fn get_all_colors(&self) -> &ThemeColors {
+        match self {
+            Self::Default         => &Self::DEFAULT_COLORS,
+            Self::CatppuccinLatte => &Self::CAT_LATTE_COLORS,
+            Self::CatppuccinMocha => &Self::CAT_MOCHA_COLORS,
+            Self::Custom(c)       => &c
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Default, Debug)]
+struct ThemeColors {
+    background_color: Color,
+    foreground_color: Color,
+    idle_color: Color,
+    hovered_color: Color,
+    clicked_color: Color,
+}
+
+
 // NOTE: Here we use serde (toml) since its a config file come on guys
 #[derive(Serialize, Deserialize, Default, Debug)]
 struct Config {
     document_directories: Vec<String>,
     font_name: Option<String>,
-    background_color: Option<Color>,
-    foreground_color: Option<Color>,
-
-    idle_color: Option<Color>,
-    hovered_color: Option<Color>,
-    clicked_color: Option<Color>,
+    theme: Theme,
 }
 
 const FONT: &[u8] = include_bytes!("../assets/GeistMonoNerdFontMono-Regular.otf");
@@ -67,6 +160,7 @@ struct App {
     draw_time: std::time::Duration,
     last_query_time: std::time::Duration,
     reindex_time: std::time::Duration,
+
 }
 
 impl App {
@@ -83,14 +177,20 @@ impl App {
         (document_base_dir, config_file, index_file)
     }
 
-    fn init_config(document_base_dir: &std::path::Path, config_file: &std::path::Path) -> Config {
+    fn init_config(document_base_dir: &std::path::Path, config_file: &std::path::Path) -> Option<Config> {
         let mut config = Config::default();
         config
             .document_directories
             .push(document_base_dir.to_string_lossy().to_string());
         if config_file.exists() {
             let conf_file_content = std::fs::read_to_string(config_file).unwrap();
-            config = toml::de::from_str(&conf_file_content).unwrap();
+            config = match toml::de::from_str(&conf_file_content) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("[ERR]: Failed to parse config: {e}");
+                    return None;
+                }
+            };
             for p in &mut config.document_directories {
                 let np = std::path::PathBuf::from_str(p).unwrap();
                 let mut copy = document_base_dir.to_path_buf();
@@ -100,7 +200,7 @@ impl App {
         } else {
             std::fs::write(config_file, toml::ser::to_string_pretty(&config).unwrap()).unwrap();
         }
-        config
+        Some(config)
     }
 
     fn init_model(index_file: &std::path::Path, conf: &Config) -> HashMap<String, Document> {
@@ -128,7 +228,7 @@ impl App {
         model
     }
 
-    pub fn new() -> Self {
+    pub fn new() -> Option<Self> {
         let init = std::time::Instant::now();
         let (mut h, t) = raylib::init()
             .msaa_4x()
@@ -142,7 +242,10 @@ impl App {
 
         let (document_base_dir, config_file, index_file) = Self::init_directories();
 
-        let config = Self::init_config(&document_base_dir, &config_file);
+        let config = match Self::init_config(&document_base_dir, &config_file) {
+            Some(c) => c,
+            None => return None,
+        };
 
         let model_begin = std::time::Instant::now();
         let model = Self::init_model(&index_file, &config);
@@ -176,61 +279,41 @@ impl App {
             h.load_font_from_memory(&t, ".otf", FONT, 64, None).unwrap()
         };
 
-        let bg_color = if let Some(c) = &config.background_color {
-            raylib::color::Color::new(c.r, c.g, c.b, 255)
-        } else {
-            raylib::color::Color::new(0x18, 0x18, 0x18, 255)
-        };
+        let colors = config.theme.get_all_colors();
 
-        let fg_color = if let Some(c) = &config.foreground_color {
-            raylib::color::Color::new(c.r, c.g, c.b, 255)
-        } else {
-            raylib::color::Color::new(0xbb, 0xbb, 0xbb, 255)
-        };
+        let bg_color = colors.background_color.into_raylib();
+        let fg_color = colors.foreground_color.into_raylib();
+        let idle_color = colors.idle_color.into_raylib();
+        let hover_color = colors.hovered_color.into_raylib();
+        let click_color = colors.clicked_color.into_raylib();
 
-        let idle_color = if let Some(c) = &config.idle_color {
-            raylib::color::Color::new(c.r, c.g, c.b, 255)
-        } else {
-            raylib::color::Color::new(20, 20, 20, 255)
-        };
-
-        let hover_color = if let Some(c) = &config.hovered_color {
-            raylib::color::Color::new(c.r, c.g, c.b, 255)
-        } else {
-            raylib::color::Color::new(30, 30, 30, 255)
-        };
-
-        let click_color = if let Some(c) = &config.clicked_color {
-            raylib::color::Color::new(c.r, c.g, c.b, 255)
-        } else {
-            raylib::color::Color::new(40, 40, 40, 255)
-        };
-
-        Self {
-            raylib_thread: t,
-            raylib_handle: h,
-            font,
-            bg_color,
-            fg_color,
-            idle_color,
-            hover_color,
-            click_color,
-            doc_offset: 0.0,
-            docs: vec![],
-            model,
-            query: String::new(),
-            query_box_selected: false,
-            scroll_velocity: raylib::math::Vector2::zero(),
-            conf: config,
-            index_file,
-            boot_time: init.elapsed(),
-            boot_index_time: model_end,
-            update_time: std::time::Duration::from_secs(0),
-            draw_time: std::time::Duration::from_secs(0),
-            last_query_time: std::time::Duration::from_secs(0),
-            reindex_time: std::time::Duration::from_secs(0),
-            display_profile_data: false
-        }
+        Some(
+            Self {
+                raylib_thread: t,
+                raylib_handle: h,
+                font,
+                bg_color,
+                fg_color,
+                idle_color,
+                hover_color,
+                click_color,
+                doc_offset: 0.0,
+                docs: vec![],
+                model,
+                query: String::new(),
+                query_box_selected: false,
+                scroll_velocity: raylib::math::Vector2::zero(),
+                conf: config,
+                index_file,
+                boot_time: init.elapsed(),
+                boot_index_time: model_end,
+                update_time: std::time::Duration::from_secs(0),
+                draw_time: std::time::Duration::from_secs(0),
+                last_query_time: std::time::Duration::from_secs(0),
+                reindex_time: std::time::Duration::from_secs(0),
+                display_profile_data: false
+            }
+        )
     }
 
     // only reindexes the files (does not refresh the config)
@@ -421,17 +504,6 @@ impl App {
                 0.0,
                 self.fg_color,
             );
-            d.draw_rectangle_rounded(
-                raylib::math::Rectangle::new(
-                    w_w as f32 / 128.0,
-                    -96.0 + w_h as f32 - w_w as f32 / 128.0,
-                    96.0,
-                    96.0,
-                ),
-                0.1,
-                10,
-                self.idle_color,
-            );
             self.draw_time = draw_time.elapsed();
 
             if self.display_profile_data {
@@ -460,7 +532,10 @@ impl App {
 }
 
 fn main() {
-    App::new().run();
+    match App::new() {
+        Some(app) => app.run(),
+        None => {}
+    }
 }
 
 fn create_document_from_text(text: &str) -> Document {
