@@ -1,119 +1,10 @@
+mod config;
 mod search_model;
+mod theme;
 use raylib::prelude::{RaylibDraw, RaylibScissorModeExt};
 use raylib::text::RaylibFont;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::{collections::HashMap, io::Read, str::FromStr};
+use std::{collections::HashMap, io::Read};
 
-#[derive(Default, Debug, Clone, Copy)]
-struct Color {
-    r: u8,
-    g: u8,
-    b: u8,
-}
-
-impl Color {
-    pub const fn new(r: u8, g: u8, b: u8) -> Self {
-        Self { r, g, b }
-    }
-
-    pub const fn into_raylib(self) -> raylib::color::Color {
-        raylib::color::Color::new(self.r, self.g, self.b, 255)
-    }
-}
-
-impl Serialize for Color {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let s = format!("#{:02x}{:02x}{:02x}", self.r, self.g, self.b);
-        serializer.serialize_str(&s)
-    }
-}
-
-impl<'de> Deserialize<'de> for Color {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        let s = s
-            .strip_prefix('#')
-            .ok_or_else(|| serde::de::Error::custom("expected #RRGGBB"))?;
-
-        if s.len() != 6 {
-            return Err(serde::de::Error::custom("expected #RRGGBB"));
-        }
-
-        let r = u8::from_str_radix(&s[0..2], 16).map_err(serde::de::Error::custom)?;
-        let g = u8::from_str_radix(&s[2..4], 16).map_err(serde::de::Error::custom)?;
-        let b = u8::from_str_radix(&s[4..6], 16).map_err(serde::de::Error::custom)?;
-
-        Ok(Color { r, g, b })
-    }
-}
-
-#[derive(Serialize, Deserialize, Default, Debug)]
-#[serde(rename_all = "kebab-case")]
-enum Theme {
-    #[default]
-    Default,
-    CatppuccinLatte,
-    CatppuccinMocha,
-    Custom(ThemeColors),
-}
-
-impl Theme {
-    const DEFAULT_COLORS: ThemeColors = ThemeColors {
-        background_color: Color::new(0x18, 0x18, 0x18),
-        foreground_color: Color::new(0xcc, 0xcc, 0xcc),
-        idle_color: Color::new(0x20, 0x20, 0x20),
-        hovered_color: Color::new(0x30, 0x30, 0x30),
-        clicked_color: Color::new(0x40, 0x40, 0x40),
-    };
-
-    const CAT_LATTE_COLORS: ThemeColors = ThemeColors {
-        background_color: Color::new(0xef, 0xf1, 0xf5), // BASE
-        foreground_color: Color::new(0x4c, 0x4f, 0x69), // TEXT
-        idle_color: Color::new(0xdc, 0x8a, 0x78),       // ROSEWATER
-        hovered_color: Color::new(0xdd, 0x78, 0x78),    // FLAMINGO
-        clicked_color: Color::new(0xea, 0x76, 0xcb),    // PINK
-    };
-
-    const CAT_MOCHA_COLORS: ThemeColors = ThemeColors {
-        background_color: Color::new(0x1e, 0x1e, 0x2e), // BASE
-        foreground_color: Color::new(0xcd, 0xd6, 0xf4), // TEXT
-        idle_color: Color::new(0x31, 0x32, 0x44),       // SURFACE 0
-        hovered_color: Color::new(0x45, 0x47, 0x5a),    // SURFACE 1
-        clicked_color: Color::new(0x58, 0x5b, 0x70),    // SURFACE 2
-    };
-
-    pub fn get_all_colors(&self) -> &ThemeColors {
-        match self {
-            Self::Default => &Self::DEFAULT_COLORS,
-            Self::CatppuccinLatte => &Self::CAT_LATTE_COLORS,
-            Self::CatppuccinMocha => &Self::CAT_MOCHA_COLORS,
-            Self::Custom(c) => &c,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Default, Debug)]
-struct ThemeColors {
-    background_color: Color,
-    foreground_color: Color,
-    idle_color: Color,
-    hovered_color: Color,
-    clicked_color: Color,
-}
-
-// NOTE: Here we use serde (toml) since its a config file come on guys
-#[derive(Serialize, Deserialize, Default, Debug)]
-struct Config {
-    document_directories: Vec<String>,
-    font_name: Option<String>,
-    theme: Theme,
-}
 
 const FONT: &[u8] = include_bytes!("../assets/GeistMonoNerdFontMono-Regular.otf");
 
@@ -136,7 +27,7 @@ struct App {
     scroll_velocity: raylib::math::Vector2,
     doc_offset: f32,
 
-    conf: Config,
+    conf: config::Config,
 
     display_profile_data: bool,
 
@@ -221,71 +112,10 @@ impl App {
         Some((document_base_dir, config_file, index_file))
     }
 
-    fn init_config(
-        document_base_dir: &std::path::Path,
-        config_file: &std::path::Path,
-    ) -> Option<Config> {
-        let mut config = Config::default();
-        config
-            .document_directories
-            .push(document_base_dir.to_string_lossy().to_string());
-        if config_file.exists() {
-            let conf_file_content = match std::fs::read_to_string(config_file) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!(
-                        "[ERR]: Failed to read config file {}: {e}",
-                        config_file.display()
-                    );
-                    return None;
-                }
-            };
-            config = match toml::de::from_str(&conf_file_content) {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("[ERR]: Failed to parse config: {e}");
-                    return None;
-                }
-            };
-            for p in &mut config.document_directories {
-                let np = match std::path::PathBuf::from_str(p) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        eprintln!("[ERR]: Failed to parse document directory string {p}: {e}");
-                        return None;
-                    }
-                };
-                let mut copy = document_base_dir.to_path_buf();
-                copy.push(np);
-                *p = copy.to_string_lossy().to_string();
-            }
-        } else {
-            match std::fs::write(
-                config_file,
-                match toml::ser::to_string_pretty(&config) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        eprintln!("[ERR]: Failed to serialize {config:?}: {e}");
-                        return None;
-                    }
-                },
-            ) {
-                Ok(()) => {}
-                Err(e) => {
-                    eprintln!(
-                        "[ERR]: Failed to write config to {}: {e}",
-                        config_file.display()
-                    );
-                    return None;
-                }
-            };
-        }
-        Some(config)
-    }
 
     fn init_model(
         index_file: &std::path::Path,
-        conf: &Config,
+        conf: &config::Config,
     ) -> HashMap<String, search_model::Document> {
         let mut model = HashMap::new();
         if index_file.exists() {
@@ -322,7 +152,7 @@ impl App {
         let (document_base_dir, config_file, index_file) = Self::init_directories()?;
         eprintln!("[INFO]: Directories initialized");
 
-        let config = match Self::init_config(&document_base_dir, &config_file) {
+        let config = match config::Config::new(&document_base_dir, &config_file) {
             Some(c) => c,
             None => return None,
         };
@@ -539,7 +369,10 @@ impl App {
 
                 if rect.y < w_h as f32 && rect.y > 0.0 {
                     if rect.check_collision_point_rec(self.raylib_handle.get_mouse_position()) {
-                        if self.raylib_handle.is_mouse_button_down(raylib::consts::MouseButton::MOUSE_BUTTON_LEFT) { 
+                        if self
+                            .raylib_handle
+                            .is_mouse_button_down(raylib::consts::MouseButton::MOUSE_BUTTON_LEFT)
+                        {
                             open::that(d).unwrap();
                         }
                     }
@@ -567,19 +400,25 @@ impl App {
                 }
                 if rect.y < w_h as f32 && rect.y > 0.0 {
                     d.draw_rectangle_rounded(rect, 0.1, 10, result_color);
-                    d.draw_scissor_mode(rect.x as i32, rect.y as i32, rect.width as i32, rect.height as i32, |mut d| {
-                        d.draw_text_ex(
-                            &self.font,
-                            doc,
-                            raylib::math::Vector2::new(
-                                rect.x + rect.width / 128.0,
-                                rect.y + rect.height / 4.0,
-                            ),
-                            32.0,
-                            0.0,
-                            self.fg_color,
-                        );
-                    });
+                    d.draw_scissor_mode(
+                        rect.x as i32,
+                        rect.y as i32,
+                        rect.width as i32,
+                        rect.height as i32,
+                        |mut d| {
+                            d.draw_text_ex(
+                                &self.font,
+                                doc,
+                                raylib::math::Vector2::new(
+                                    rect.x + rect.width / 128.0,
+                                    rect.y + rect.height / 4.0,
+                                ),
+                                32.0,
+                                0.0,
+                                self.fg_color,
+                            );
+                        },
+                    );
                 }
             }
 
@@ -598,19 +437,27 @@ impl App {
 
             d.draw_rectangle_rounded(search_rect, 0.1, 10, search_color);
 
-            d.draw_scissor_mode(search_rect.x as i32, search_rect.y as i32, search_rect.width as i32, search_rect.height as i32, |mut d| {
-                d.draw_text_ex(
-                    &self.font,
-                    &self.query,
-                    raylib::math::Vector2::new(
-                        search_rect.x + search_rect.x / 16.0 + (search_rect.x + search_rect.x / 128.0),
-                        search_rect.y + search_rect.y / 16.0,
-                    ),
-                    32.0,
-                    0.0,
-                    self.fg_color,
-                );
-            });
+            d.draw_scissor_mode(
+                search_rect.x as i32,
+                search_rect.y as i32,
+                search_rect.width as i32,
+                search_rect.height as i32,
+                |mut d| {
+                    d.draw_text_ex(
+                        &self.font,
+                        &self.query,
+                        raylib::math::Vector2::new(
+                            search_rect.x
+                                + search_rect.x / 16.0
+                                + (search_rect.x + search_rect.x / 128.0),
+                            search_rect.y + search_rect.y / 16.0,
+                        ),
+                        32.0,
+                        0.0,
+                        self.fg_color,
+                    );
+                },
+            );
             self.draw_time = draw_time.elapsed();
 
             if self.display_profile_data {
