@@ -1,5 +1,5 @@
 mod search_model;
-use raylib::prelude::RaylibDraw;
+use raylib::prelude::{RaylibDraw, RaylibScissorModeExt};
 use raylib::text::RaylibFont;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{collections::HashMap, io::Read, str::FromStr};
@@ -532,6 +532,20 @@ impl App {
                 self.display_profile_data = !self.display_profile_data;
             }
 
+            for (i, d) in self.docs.iter().enumerate() {
+                let mut rect = search_rect;
+                rect.y += self.doc_offset;
+                rect.y += (i + 1) as f32 * rect.height * 1.1;
+
+                if rect.y < w_h as f32 && rect.y > 0.0 {
+                    if rect.check_collision_point_rec(self.raylib_handle.get_mouse_position()) {
+                        if self.raylib_handle.is_mouse_button_down(raylib::consts::MouseButton::MOUSE_BUTTON_LEFT) { 
+                            open::that(d).unwrap();
+                        }
+                    }
+                }
+            }
+
             self.update_time = update_time.elapsed();
 
             let mut d = self.raylib_handle.begin_drawing(&self.raylib_thread);
@@ -553,17 +567,19 @@ impl App {
                 }
                 if rect.y < w_h as f32 && rect.y > 0.0 {
                     d.draw_rectangle_rounded(rect, 0.1, 10, result_color);
-                    d.draw_text_ex(
-                        &self.font,
-                        doc,
-                        raylib::math::Vector2::new(
-                            rect.x + rect.width / 128.0,
-                            rect.y + rect.height / 4.0,
-                        ),
-                        32.0,
-                        0.0,
-                        self.fg_color,
-                    );
+                    d.draw_scissor_mode(rect.x as i32, rect.y as i32, rect.width as i32, rect.height as i32, |mut d| {
+                        d.draw_text_ex(
+                            &self.font,
+                            doc,
+                            raylib::math::Vector2::new(
+                                rect.x + rect.width / 128.0,
+                                rect.y + rect.height / 4.0,
+                            ),
+                            32.0,
+                            0.0,
+                            self.fg_color,
+                        );
+                    });
                 }
             }
 
@@ -581,17 +597,20 @@ impl App {
             d.draw_text_ex(&self.font, label_text, label_pos, 64.0, 0.0, self.fg_color);
 
             d.draw_rectangle_rounded(search_rect, 0.1, 10, search_color);
-            d.draw_text_ex(
-                &self.font,
-                &self.query,
-                raylib::math::Vector2::new(
-                    search_rect.x + search_rect.x / 16.0 + (search_rect.x + search_rect.x / 128.0),
-                    search_rect.y + search_rect.y / 16.0,
-                ),
-                32.0,
-                0.0,
-                self.fg_color,
-            );
+
+            d.draw_scissor_mode(search_rect.x as i32, search_rect.y as i32, search_rect.width as i32, search_rect.height as i32, |mut d| {
+                d.draw_text_ex(
+                    &self.font,
+                    &self.query,
+                    raylib::math::Vector2::new(
+                        search_rect.x + search_rect.x / 16.0 + (search_rect.x + search_rect.x / 128.0),
+                        search_rect.y + search_rect.y / 16.0,
+                    ),
+                    32.0,
+                    0.0,
+                    self.fg_color,
+                );
+            });
             self.draw_time = draw_time.elapsed();
 
             if self.display_profile_data {
