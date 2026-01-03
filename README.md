@@ -17,25 +17,31 @@ It's created on first start with the needed keys.
 struct Config {
     document_directories: Vec<String>,
     font_name: Option<String>,
-    background_color: Option<Color>,
-    foreground_color: Option<Color>,
-
-    idle_color: Option<Color>,
-    hovered_color: Option<Color>,
-    clicked_color: Option<Color>,
+    theme: Theme,
 }
 ```
+Example .toml config:
+```toml
+document_directories = ["/home/issac/Documents/local-search"]
+theme = "default"
+```
 By default a search path for your Documents/local-search is appended to the document_directories key.
-Colors are RGB tables.
 
-### Key descriptions:
- - document_directories: directories in which to find files to index (recursively)
- - font_name           : fc-list compatible name of a font (if not provided will use builtin GeistMono)
- - others should be self explanatory :)
+
+## Keybinds (not customizable *yet*!):
+ - <C-d> show debug info
+ - <r> (while not focused on the query input box) reindex the files (blocks the UI)
+ - <Enter> do query
+
+
+## Built-in themes (*PR's are open for more!*)
+ - Catppuccin Latte/Mocha (theme = "catppuccin-mocha")
+ - Default (theme = "default", or unspecified)
 
 ## Misc. info
- - The index file is stored in ~/.local/state/local-search/index.json (linux) or C:\Users\%USERNAME%\AppData\Local\local-search\index.json (windows)
+ - The index file is stored in ~/.local/state/local-search/index.bin (linux) or C:\Users\%USERNAME%\AppData\Local\local-search\index.bin (windows)
  - Uses tf-idf
+ - Press on a result document to open it (via xdg-open or other OS specific protocol)
 
 ## TODO
  - Todos are in the source files
